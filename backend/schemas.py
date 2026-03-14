@@ -2,6 +2,29 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+# ─── Auth ─── #
+class UserCreate(BaseModel):
+    full_name: str
+    email: str
+    password: str
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class UserResponse(BaseModel):
+    id: str
+    full_name: str
+    email: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 
 # ─── Categories ─── #
 class CategoryCreate(BaseModel):
