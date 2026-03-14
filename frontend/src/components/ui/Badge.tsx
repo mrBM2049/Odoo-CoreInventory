@@ -1,4 +1,4 @@
-import type { OperationStatus } from '../../data/mockData';
+import type { OperationStatus } from '../../types/operations';
 
 interface BadgeProps {
   status: OperationStatus;

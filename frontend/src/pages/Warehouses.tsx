@@ -1,12 +1,41 @@
-import { useState } from 'react';
-import { mockWarehouses, mockLocations, type Warehouse, type Location } from '../data/mockData';
+import { useEffect, useState } from 'react';
 import { useToast } from '../components/ui/Toast';
+import { apiDelete, apiGet, apiPost } from '../lib/api';
 import { Warehouse as WarehouseIcon, MapPin, Plus, Save, Trash2 } from 'lucide-react';
+
+interface ApiWarehouse {
+  id: number;
+  name: string;
+  address?: string | null;
+}
+
+interface ApiLocation {
+  id: number;
+  warehouse_id: number;
+  name: string;
+  description?: string | null;
+}
+
+interface UiWarehouse {
+  id: number;
+  name: string;
+  shortCode: string;
+  address: string;
+}
+
+interface UiLocation {
+  id: number;
+  name: string;
+  shortCode: string;
+  warehouseId: number;
+}
 
 export function Warehouses() {
   const { showToast } = useToast();
-  const [warehouses, setWarehouses] = useState<Warehouse[]>(mockWarehouses.map(w => ({ ...w })));
-  const [locations, setLocations] = useState<Location[]>(mockLocations.map(l => ({ ...l })));
+  const [warehouses, setWarehouses] = useState<UiWarehouse[]>([]);
+  const [locations, setLocations] = useState<UiLocation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Warehouse form
   const [whName, setWhName] = useState('');
@@ -16,24 +45,99 @@ export function Warehouses() {
   // Location form
   const [locName, setLocName] = useState('');
   const [locCode, setLocCode] = useState('');
-  const [locWarehouseId, setLocWarehouseId] = useState(warehouses[0]?.id || '');
+  const [locWarehouseId, setLocWarehouseId] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const deriveShortCode = (name: string) =>
+      name
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word) => word[0]?.toUpperCase() ?? '')
+        .join('')
+        .slice(0, 4);
+
+    async function loadData() {
+      try {
+        setLoading(true);
+        const [whRes, locRes] = await Promise.all([
+          apiGet<ApiWarehouse[]>('/api/v1/warehouses'),
+          apiGet<ApiLocation[]>('/api/v1/locations'),
+        ]);
+
+        if (cancelled) return;
+
+        const mappedWarehouses: UiWarehouse[] = whRes.map((w) => ({
+          id: w.id,
+          name: w.name,
+          shortCode: deriveShortCode(w.name),
+          address: w.address ?? '',
+        }));
+
+        const mappedLocations: UiLocation[] = locRes.map((l) => ({
+          id: l.id,
+          name: l.name,
+          shortCode: l.description ?? deriveShortCode(l.name),
+          warehouseId: l.warehouse_id,
+        }));
+
+        setWarehouses(mappedWarehouses);
+        setLocations(mappedLocations);
+        setLocWarehouseId(mappedWarehouses[0]?.id.toString() ?? '');
+        setError(null);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Failed to load warehouses',
+        );
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSaveWarehouse = () => {
     if (!whName.trim() || !whCode.trim()) {
       showToast('Please fill in warehouse name and short code', 'error');
       return;
     }
-    const newWh: Warehouse = {
-      id: `wh_${Date.now()}`,
-      name: whName.trim(),
-      shortCode: whCode.trim().toUpperCase(),
-      address: whAddress.trim(),
-    };
-    setWarehouses(prev => [...prev, newWh]);
-    setWhName('');
-    setWhCode('');
-    setWhAddress('');
-    showToast(`Warehouse "${newWh.name}" created successfully!`);
+    (async () => {
+      try {
+        const created = await apiPost<ApiWarehouse>('/api/v1/warehouses', {
+          name: whName.trim(),
+          address: whAddress.trim(),
+        });
+        const newWh: UiWarehouse = {
+          id: created.id,
+          name: created.name,
+          shortCode: whCode.trim().toUpperCase(),
+          address: created.address ?? '',
+        };
+        setWarehouses((prev) => [...prev, newWh]);
+        setWhName('');
+        setWhCode('');
+        setWhAddress('');
+        if (!locWarehouseId) {
+          setLocWarehouseId(String(newWh.id));
+        }
+        showToast(`Warehouse "${newWh.name}" created successfully!`);
+      } catch (err) {
+        showToast(
+          err instanceof Error
+            ? err.message
+            : 'Failed to create warehouse',
+          'error',
+        );
+      }
+    })();
   };
 
   const handleSaveLocation = () => {
@@ -41,27 +145,73 @@ export function Warehouses() {
       showToast('Please fill in all location fields', 'error');
       return;
     }
-    const newLoc: Location = {
-      id: `loc_${Date.now()}`,
-      name: locName.trim(),
-      shortCode: locCode.trim(),
-      warehouseId: locWarehouseId,
-    };
-    setLocations(prev => [...prev, newLoc]);
-    setLocName('');
-    setLocCode('');
-    showToast(`Location "${newLoc.name}" created successfully!`);
+    const warehouseIdNum = Number(locWarehouseId);
+    if (Number.isNaN(warehouseIdNum)) {
+      showToast('Invalid warehouse selected', 'error');
+      return;
+    }
+
+    (async () => {
+      try {
+        const created = await apiPost<ApiLocation>('/api/v1/locations', {
+          warehouse_id: warehouseIdNum,
+          name: locName.trim(),
+          description: locCode.trim(),
+        });
+        const newLoc: UiLocation = {
+          id: created.id,
+          name: created.name,
+          shortCode: created.description ?? locCode.trim(),
+          warehouseId: created.warehouse_id,
+        };
+        setLocations((prev) => [...prev, newLoc]);
+        setLocName('');
+        setLocCode('');
+        showToast(`Location "${newLoc.name}" created successfully!`);
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Failed to create location',
+          'error',
+        );
+      }
+    })();
   };
 
-  const handleDeleteWarehouse = (id: string) => {
-    setWarehouses(prev => prev.filter(w => w.id !== id));
-    setLocations(prev => prev.filter(l => l.warehouseId !== id));
-    showToast('Warehouse deleted', 'warning');
+  const handleDeleteWarehouse = (id: number) => {
+    const numericId = Number(id);
+    if (Number.isNaN(numericId)) return;
+
+    (async () => {
+      try {
+        await apiDelete(`/api/v1/warehouses/${numericId}`);
+        setWarehouses((prev) => prev.filter((w) => w.id !== numericId));
+        setLocations((prev) => prev.filter((l) => l.warehouseId !== numericId));
+        showToast('Warehouse deleted', 'warning');
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Failed to delete warehouse',
+          'error',
+        );
+      }
+    })();
   };
 
-  const handleDeleteLocation = (id: string) => {
-    setLocations(prev => prev.filter(l => l.id !== id));
-    showToast('Location deleted', 'warning');
+  const handleDeleteLocation = (id: number) => {
+    const numericId = Number(id);
+    if (Number.isNaN(numericId)) return;
+
+    (async () => {
+      try {
+        await apiDelete(`/api/v1/locations/${numericId}`);
+        setLocations((prev) => prev.filter((l) => l.id !== numericId));
+        showToast('Location deleted', 'warning');
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Failed to delete location',
+          'error',
+        );
+      }
+    })();
   };
 
   return (
@@ -69,6 +219,22 @@ export function Warehouses() {
       <div className="page-header">
         <h1>Settings — Warehouses & Locations</h1>
       </div>
+
+      {loading && (
+        <div className="detail-section" style={{ marginBottom: 16 }}>
+          <div className="skeleton-row skeleton" />
+          <div className="skeleton-row skeleton" />
+        </div>
+      )}
+
+      {!loading && error && (
+        <div
+          className="detail-section"
+          style={{ marginBottom: 16, color: 'var(--error)' }}
+        >
+          {error}
+        </div>
+      )}
 
       {/* Warehouse Section */}
       <div className="settings-section">

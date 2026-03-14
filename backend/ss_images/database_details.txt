@@ -1,0 +1,1 @@
+postgresql://postgres:Core_inventorY#26@db.ounsppprdlwlojlxudal.supabase.co:5432/postgres

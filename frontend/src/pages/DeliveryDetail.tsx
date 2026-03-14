@@ -1,25 +1,85 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { mockDeliveries, mockProducts, type Delivery, type OperationProduct } from '../data/mockData';
+import type { OperationStatus } from '../types/operations';
 import { Badge } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
+import { apiGet, apiPost } from '../lib/api';
 import { ArrowLeft, CheckCircle2, Printer, XCircle, Plus } from 'lucide-react';
+
+interface OperationItem {
+  id: number;
+  product_id: number;
+  quantity: number;
+  source_location_id: number | null;
+  destination_location_id: number | null;
+  product?: {
+    name: string;
+  } | null;
+}
+
+interface Operation {
+  id: number;
+  type: string;
+  status: OperationStatus;
+  created_at?: string;
+  items: OperationItem[];
+}
 
 export function DeliveryDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { showToast } = useToast();
 
-  const original = mockDeliveries.find(d => d.id === id);
-  const [delivery, setDelivery] = useState<Delivery | undefined>(
-    original ? { ...original, products: original.products.map(p => ({ ...p })) } : undefined
-  );
+  const [delivery, setDelivery] = useState<Operation | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!delivery) {
+  useEffect(() => {
+    let cancelled = false;
+    const numericId = id ? Number(id) : NaN;
+    if (!id || Number.isNaN(numericId)) {
+      setError('Invalid delivery ID');
+      setLoading(false);
+      return;
+    }
+
+    async function loadDelivery() {
+      try {
+        setLoading(true);
+        const data = await apiGet<Operation>(`/api/v1/operations/${numericId}`);
+        if (!cancelled) {
+          setDelivery(data);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load delivery');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadDelivery();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="detail-section">
+        <div className="skeleton-row skeleton" />
+        <div className="skeleton-row skeleton" />
+      </div>
+    );
+  }
+
+  if (error || !delivery) {
     return (
       <div className="empty-state">
         <h3>Delivery not found</h3>
-        <p>The delivery order you are looking for does not exist.</p>
+        <p>{error || 'The delivery order you are looking for does not exist.'}</p>
         <button className="btn btn-primary btn-sm" style={{ marginTop: 16 }} onClick={() => navigate('/operations/deliveries')}>
           Back to Deliveries
         </button>
@@ -28,47 +88,45 @@ export function DeliveryDetail() {
   }
 
   const handleValidate = () => {
-    // Check for insufficient stock
-    const insufficientProducts = delivery.products.filter(dp => {
-      const product = mockProducts.find(p => p.id === dp.productId);
-      return product && product.onHand < dp.quantity;
-    });
+    if (!delivery) return;
+    const numericId = Number(delivery.id);
+    if (Number.isNaN(numericId)) return;
 
-    if (insufficientProducts.length > 0) {
-      insufficientProducts.forEach(p => {
-        showToast(`Insufficient stock for ${p.productName}`, 'warning');
-      });
-    }
-
-    if (delivery.status === 'draft') {
-      setDelivery({ ...delivery, status: 'waiting' });
-      showToast(`${delivery.reference} moved to Waiting`);
-    } else if (delivery.status === 'waiting') {
-      setDelivery({ ...delivery, status: 'ready' });
-      showToast(`${delivery.reference} is now Ready for delivery`);
-    } else if (delivery.status === 'ready') {
-      const updatedProducts = delivery.products.map(p => ({ ...p, doneQty: p.quantity }));
-      setDelivery({ ...delivery, status: 'done', products: updatedProducts });
-      showToast(`${delivery.reference} delivered successfully! Stock updated.`, 'success');
-    }
+    (async () => {
+      try {
+        const updated = await apiPost<Operation>(`/api/v1/operations/${numericId}/validate`, {});
+        setDelivery(updated);
+        showToast(`Delivery #${updated.id} delivered successfully! Stock updated.`, 'success');
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Failed to validate delivery',
+          'error',
+        );
+      }
+    })();
   };
 
   const handleCancel = () => {
-    if (delivery.status !== 'done') {
-      setDelivery({ ...delivery, status: 'cancelled' });
-      showToast(`${delivery.reference} has been cancelled`, 'error');
-    }
+    if (!delivery) return;
+    const numericId = Number(delivery.id);
+    if (Number.isNaN(numericId)) return;
+
+    (async () => {
+      try {
+        const updated = await apiPost<Operation>(`/api/v1/operations/${numericId}/cancel`, {});
+        setDelivery(updated);
+        showToast(`Delivery #${updated.id} has been cancelled`, 'error');
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Failed to cancel delivery',
+          'error',
+        );
+      }
+    })();
   };
 
   const handleAddProduct = () => {
-    const newProduct: OperationProduct = {
-      productId: `new_${Date.now()}`,
-      productName: 'New Product',
-      sku: '',
-      quantity: 0,
-      doneQty: 0,
-    };
-    setDelivery({ ...delivery, products: [...delivery.products, newProduct] });
+    showToast('Adding products to existing operations is not yet supported.', 'warning');
   };
 
   const canValidate = delivery.status !== 'done' && delivery.status !== 'cancelled';
@@ -85,7 +143,7 @@ export function DeliveryDetail() {
       </button>
 
       <div className="detail-header" style={{ marginTop: 16 }}>
-        <h1>{delivery.reference}</h1>
+        <h1>Delivery #{delivery.id}</h1>
         <Badge status={delivery.status} />
 
         <div className="status-flow" style={{ marginLeft: 16 }}>
@@ -120,23 +178,31 @@ export function DeliveryDetail() {
         <div className="detail-grid">
           <div className="detail-field">
             <span className="detail-field-label">Scheduled Date</span>
-            <span className="detail-field-value">{new Date(delivery.scheduledDate).toLocaleDateString()}</span>
+            <span className="detail-field-value">
+              {delivery.created_at ? new Date(delivery.created_at).toLocaleDateString() : '-'}
+            </span>
           </div>
           <div className="detail-field">
             <span className="detail-field-label">Delivery Type</span>
-            <span className="detail-field-value">{delivery.deliveryType}</span>
+            <span className="detail-field-value">
+              {delivery.type === 'delivery' ? 'Standard Delivery' : delivery.type}
+            </span>
           </div>
           <div className="detail-field">
             <span className="detail-field-label">Source Location</span>
-            <span className="detail-field-value">{delivery.sourceLocation}</span>
+            <span className="detail-field-value">
+              {delivery.items[0]?.source_location_id != null
+                ? `Location #${delivery.items[0].source_location_id}`
+                : '-'}
+            </span>
           </div>
           <div className="detail-field">
             <span className="detail-field-label">Responsible</span>
-            <span className="detail-field-value">{delivery.responsible}</span>
+            <span className="detail-field-value">Warehouse team</span>
           </div>
           <div className="detail-field">
             <span className="detail-field-label">Deliver To</span>
-            <span className="detail-field-value">{delivery.to}</span>
+            <span className="detail-field-value">Customer</span>
           </div>
         </div>
       </div>
@@ -147,20 +213,14 @@ export function DeliveryDetail() {
           <thead>
             <tr>
               <th>Product</th>
-              <th>SKU</th>
               <th>Demand Qty</th>
-              <th>Done Qty</th>
             </tr>
           </thead>
           <tbody>
-            {delivery.products.map((p, i) => (
+            {delivery.items.map((p, i) => (
               <tr key={i} style={{ cursor: 'default' }}>
-                <td style={{ fontWeight: 500 }}>{p.productName}</td>
-                <td style={{ color: 'var(--text-muted)' }}>{p.sku}</td>
+                <td style={{ fontWeight: 500 }}>{p.product?.name ?? `#${p.product_id}`}</td>
                 <td>{p.quantity}</td>
-                <td style={{ fontWeight: 600, color: p.doneQty === p.quantity ? 'var(--success)' : 'var(--text-main)' }}>
-                  {p.doneQty ?? 0}
-                </td>
               </tr>
             ))}
           </tbody>
